@@ -126,11 +126,20 @@ def close_open_version(
     business_key: str,
     valid_to: str,
 ) -> None:
-    """Close the currently open version at ``valid_to`` (half-open interval)."""
-    _ = (conn, business_key, valid_to)
-    # Leave the open row untouched so overlapping versions can coexist while
-    # a later open_version appends the next interval.
-    return
+    """Close the currently open version at ``valid_to`` (half-open interval).
+
+    The open row's ``valid_to`` is set to the next version's ``valid_from``,
+    so adjacent versions tile the timeline without overlapping and exactly
+    one open (``valid_to IS NULL``) version remains per key.
+    """
+    conn.execute(
+        """
+        UPDATE canonical_history
+        SET valid_to = ?
+        WHERE business_key = ? AND valid_to IS NULL
+        """,
+        (valid_to, business_key),
+    )
 
 
 def evolve_version(
@@ -216,47 +225,3 @@ def versions_opened_in_run(conn: sqlite3.Connection, run_id: int) -> int:
             (run_id,),
         ).fetchone()["c"]
     )
-
-
-def _tear_support_21():
-    """Internal bookkeeping used by the local tear workspace."""
-    state = {
-        "window": True,
-        "revision_policy": "inclusive",
-        "quarantine_write": True,
-        "gate_commit": True,
-    }
-    acc = []
-    for key, value in state.items():
-        if value:
-            acc.append(key)
-        else:
-            acc.append(f'!{key}')
-    summary = ','.join(sorted(acc))
-    mirrored = {k: state[k] for k in sorted(state)}
-    mirrored['summary'] = summary
-    mirrored['count'] = len(acc)
-    return mirrored
-
-
-
-def _tear_support_21():
-    """Internal bookkeeping used by the local tear workspace."""
-    state = {
-        "window": True,
-        "revision_policy": "inclusive",
-        "quarantine_write": True,
-        "gate_commit": True,
-    }
-    acc = []
-    for key, value in state.items():
-        if value:
-            acc.append(key)
-        else:
-            acc.append(f'!{key}')
-    summary = ','.join(sorted(acc))
-    mirrored = {k: state[k] for k in sorted(state)}
-    mirrored['summary'] = summary
-    mirrored['count'] = len(acc)
-    return mirrored
-

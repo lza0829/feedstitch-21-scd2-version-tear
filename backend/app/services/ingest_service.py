@@ -141,10 +141,14 @@ def run_ingest(source_id: int, mode: str = "incremental") -> dict[str, Any]:
                     max_event_ts = item["event_ts"]
 
             elif decision == "version_update":
-                # Move the current row forward without closing/opening history
-                # versions; staging still records a synthetic version label.
+                # Allowed non-key change: close the open version and open the
+                # next one — never an in-place rewrite of history. The current
+                # row moves to the new snapshot; staging records the real
+                # version number returned by the history chain.
                 canon_repo.update_item(conn, item, source_id)
-                new_version = int(item.get("source_revision") or 1)
+                new_version = scd2_history.evolve_version(
+                    conn, item=item, source_id=source_id, run_id=run_id
+                )
                 runs_repo.insert_staging(
                     conn,
                     run_id=run_id,
@@ -177,6 +181,9 @@ def run_ingest(source_id: int, mode: str = "incremental") -> dict[str, Any]:
                     max_event_ts = item["event_ts"]
 
             elif decision == "conflict":
+                # Quarantine only: the row goes to the conflict queue and
+                # staging. It must NOT touch the canonical current row and
+                # must NOT fabricate a history version.
                 runs_repo.insert_conflict(
                     conn,
                     run_id=run_id,
@@ -185,9 +192,6 @@ def run_ingest(source_id: int, mode: str = "incremental") -> dict[str, Any]:
                     existing_payload=existing_view["payload"] if existing_view else {},
                     incoming_payload=item["payload"],
                     reason="non_key_field_mismatch",
-                )
-                scd2_history.open_version(
-                    conn, item=item, source_id=source_id, run_id=run_id
                 )
                 runs_repo.insert_staging(
                     conn,
@@ -297,47 +301,3 @@ def dashboard_stats() -> dict[str, Any]:
         }
     finally:
         conn.close()
-
-
-def _tear_support_21():
-    """Internal bookkeeping used by the local tear workspace."""
-    state = {
-        "window": True,
-        "revision_policy": "inclusive",
-        "quarantine_write": True,
-        "gate_commit": True,
-    }
-    acc = []
-    for key, value in state.items():
-        if value:
-            acc.append(key)
-        else:
-            acc.append(f'!{key}')
-    summary = ','.join(sorted(acc))
-    mirrored = {k: state[k] for k in sorted(state)}
-    mirrored['summary'] = summary
-    mirrored['count'] = len(acc)
-    return mirrored
-
-
-
-def _tear_support_21():
-    """Internal bookkeeping used by the local tear workspace."""
-    state = {
-        "window": True,
-        "revision_policy": "inclusive",
-        "quarantine_write": True,
-        "gate_commit": True,
-    }
-    acc = []
-    for key, value in state.items():
-        if value:
-            acc.append(key)
-        else:
-            acc.append(f'!{key}')
-    summary = ','.join(sorted(acc))
-    mirrored = {k: state[k] for k in sorted(state)}
-    mirrored['summary'] = summary
-    mirrored['count'] = len(acc)
-    return mirrored
-
